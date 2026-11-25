@@ -45,6 +45,20 @@ export function normalizeIngredientNames(names: string[]): string[] {
   return [...new Set(names.map(normalizeCatalogText))].sort();
 }
 
+async function throwDupConflict(
+  deps: CatalogDeps,
+  repo: ReturnType<typeof createCatalogEntriesRepo>,
+  brandName: string,
+  form: string,
+  ingredientNames: string[],
+): Promise<never> {
+  const dup = await repo.findDuplicate(brandName, form, ingredientNames);
+  deps.metrics?.incr("medo_medicine_catalog_total", { action: "dup_conflict" });
+  throw new ConflictError("duplicate catalog entry", {
+    existingEntryId: dup?.id ?? null,
+  });
+}
+
 function isPgUniqueViolation(err: unknown): boolean {
   return (err as { code?: string }).code === "23505";
 }
@@ -171,17 +185,7 @@ export async function createCatalogEntry(
     });
   } catch (err) {
     if (isPgUniqueViolation(err)) {
-      const dup = await repo.findDuplicate(
-        brandName,
-        cmd.form,
-        ingredientNames,
-      );
-      deps.metrics?.incr("medo_medicine_catalog_total", {
-        action: "dup_conflict",
-      });
-      throw new ConflictError("duplicate catalog entry", {
-        existingEntryId: dup?.id ?? null,
-      });
+      await throwDupConflict(deps, repo, brandName, cmd.form, ingredientNames);
     }
     throw err;
   }
@@ -216,13 +220,7 @@ export async function editCatalogEntry(
       const brand = fields.brandName ?? row.brandName;
       const form = fields.form ?? row.form;
       const ings = fields.ingredientNames ?? row.ingredientNames;
-      const dup = await repo.findDuplicate(brand, form, ings);
-      deps.metrics?.incr("medo_medicine_catalog_total", {
-        action: "dup_conflict",
-      });
-      throw new ConflictError("duplicate catalog entry", {
-        existingEntryId: dup?.id ?? null,
-      });
+      await throwDupConflict(deps, repo, brand, form, ings);
     }
     throw err;
   }

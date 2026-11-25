@@ -98,7 +98,9 @@ export function registerAuthn(app: FastifyInstance, deps: AuthnDeps): void {
     if (mode === "user") {
       try {
         request.user = await verifyUser(token);
-      } catch {
+      } catch (err) {
+        // JWKS outage → fail-closed 503; bad/expired token → 401
+        if (err instanceof DependencyError) throw err;
         throw new AuthError(401, "UNAUTHORIZED", "invalid token");
       }
       return;
