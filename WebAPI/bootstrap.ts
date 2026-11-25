@@ -33,13 +33,24 @@ import {
   type MetricsImpl,
 } from "./Middleware/metrics.js";
 import { registerCatalogRoutes } from "./Public/routes.js";
+import { registerMedicineRoutes } from "./Public/medicines.js";
 import { registerPlatformRoutes } from "./Platform/routes.js";
+import { createServiceTokenMinter } from "@infrastructure/AuthzClient/serviceToken.js";
+import {
+  createCachedCheckLink,
+  createCareCheckLinkClient,
+  type CheckLinkCache,
+} from "@infrastructure/AuthzClient/checkLink.js";
+import { createScheduleDoseClient } from "@infrastructure/ScheduleDoseClient/hasDoseRecords.js";
 
 const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
   BROKER_DATABASE_URL: z.string().min(1),
   SERVICE_PUBLIC_KEYS: z.string().min(1),
+  SERVICE_PRIVATE_KEY: z.string().min(1),
   IDENTITY_JWKS_URL: z.string().min(1),
+  CARE_SERVICE_URL: z.string().min(1),
+  SCHEDULE_DOSE_SERVICE_URL: z.string().min(1),
   R2_ENDPOINT: z.string().min(1),
   R2_ACCESS_KEY_ID: z.string().min(1),
   R2_SECRET_ACCESS_KEY: z.string().min(1),
@@ -60,7 +71,10 @@ export interface AppConfig {
   databaseUrl: string;
   brokerDatabaseUrl: string;
   servicePublicKeys: Record<string, JWK[]>;
+  servicePrivateKey: JWK;
   identityJwksUrl: string;
+  careServiceUrl: string;
+  scheduleDoseServiceUrl: string;
   r2: R2Config;
   sentryDsn: string;
 }
@@ -77,7 +91,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       string,
       JWK[]
     >,
+    servicePrivateKey: JSON.parse(e.SERVICE_PRIVATE_KEY) as JWK,
     identityJwksUrl: e.IDENTITY_JWKS_URL,
+    careServiceUrl: e.CARE_SERVICE_URL,
+    scheduleDoseServiceUrl: e.SCHEDULE_DOSE_SERVICE_URL,
     r2: {
       endpoint: e.R2_ENDPOINT,
       accessKeyId: e.R2_ACCESS_KEY_ID,
@@ -106,6 +123,7 @@ export interface BuiltApp {
   db: Db;
   metrics: MetricsImpl;
   r2: R2Client;
+  checkLinkCache: CheckLinkCache;
   publisher?: PublisherHandle;
   close: () => Promise<void>;
 }
@@ -153,6 +171,27 @@ export async function buildApp(deps: AppDeps): Promise<BuiltApp> {
 
   const catalogDeps = { db: deps.db, r2, metrics };
   registerCatalogRoutes(app, catalogDeps);
+
+  const mintServiceToken = createServiceTokenMinter(config.servicePrivateKey);
+  const checkLinkClient = createCachedCheckLink(
+    createCareCheckLinkClient({
+      baseUrl: config.careServiceUrl,
+      mintServiceToken,
+      fetchImpl: deps.fetchImpl,
+    }),
+  );
+  const scheduleDoseClient = createScheduleDoseClient({
+    baseUrl: config.scheduleDoseServiceUrl,
+    mintServiceToken,
+    fetchImpl: deps.fetchImpl,
+  });
+  registerMedicineRoutes(app, {
+    db: deps.db,
+    r2,
+    checkLink: checkLinkClient.checkLink,
+    hasDoseRecords: (patientId) => scheduleDoseClient.hasDoseRecords(patientId),
+    metrics,
+  });
   registerPlatformRoutes(app, {
     db: deps.db,
     broker: deps.brokerQueryable,
@@ -178,6 +217,7 @@ export async function buildApp(deps: AppDeps): Promise<BuiltApp> {
     db: deps.db,
     metrics,
     r2,
+    checkLinkCache: checkLinkClient.cache,
     publisher,
     close: async () => {
       if (publisher) await publisher.stop();

@@ -1,8 +1,9 @@
-import { and, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
+import { and, desc, eq, ilike, inArray, isNull, or, sql } from "drizzle-orm";
 import {
   catalogPhotoKeys,
   catalogPhotos,
   medicineCatalogEntries,
+  patientMedicines,
 } from "./schema/index.js";
 import type {
   CatalogEntryRow,
@@ -10,6 +11,8 @@ import type {
   CatalogPhotoRow,
   NewCatalogEntryRow,
   NewCatalogPhotoKeyRow,
+  NewPatientMedicineRow,
+  PatientMedicineRow,
   PhotoSlot,
 } from "./schema/index.js";
 import type { Db, DbTx } from "./db.js";
@@ -71,6 +74,13 @@ export function createCatalogEntriesRepo(db: Db) {
         .where(eq(medicineCatalogEntries.id, id))
         .returning();
       return rows[0] ?? null;
+    },
+    async findByIds(ids: string[]): Promise<CatalogEntryRow[]> {
+      if (ids.length === 0) return [];
+      return db
+        .select()
+        .from(medicineCatalogEntries)
+        .where(inArray(medicineCatalogEntries.id, ids));
     },
     // Normalized-identity dup check — brand+form narrow, sorted-array equality (LD-MED-06).
     async findDuplicate(
@@ -204,4 +214,87 @@ export function createCatalogPhotoKeysRepo(db: Db) {
 
 export type CatalogPhotoKeysRepo = ReturnType<
   typeof createCatalogPhotoKeysRepo
+>;
+
+export type PatientMedicinePatch = Partial<{
+  prescribingDoctor: string;
+  dosage: string;
+  dosesRemaining: number;
+  price: number;
+  pharmacyName: string;
+  refillLowArmed: boolean;
+  refillOutArmed: boolean;
+}>;
+
+// Patient-medicine repos take the executor per call — pass deps.db pre-tx or
+// the tx object inside a transaction (PGlite is single-connection; mixing
+// db+tx deadlocks).
+export function createPatientMedicinesRepo() {
+  const exec = (e: Db | DbTx) => e as unknown as Db;
+  return {
+    async insert(
+      e: Db | DbTx,
+      row: NewPatientMedicineRow,
+    ): Promise<PatientMedicineRow> {
+      const rows = await exec(e)
+        .insert(patientMedicines)
+        .values(row)
+        .returning();
+      return rows[0];
+    },
+    async findById(
+      e: Db | DbTx,
+      id: string,
+    ): Promise<PatientMedicineRow | null> {
+      const rows = await exec(e)
+        .select()
+        .from(patientMedicines)
+        .where(eq(patientMedicines.id, id))
+        .limit(1);
+      return rows[0] ?? null;
+    },
+    // All rows for patient — archived filtering is a Core concern (list vs detail).
+    async listByPatient(
+      e: Db | DbTx,
+      patientId: string,
+    ): Promise<PatientMedicineRow[]> {
+      return exec(e)
+        .select()
+        .from(patientMedicines)
+        .where(eq(patientMedicines.patientId, patientId));
+    },
+    async updateFields(
+      e: Db | DbTx,
+      id: string,
+      fields: PatientMedicinePatch,
+    ): Promise<PatientMedicineRow | null> {
+      const rows = await exec(e)
+        .update(patientMedicines)
+        .set({ ...fields, updatedAt: new Date() })
+        .where(eq(patientMedicines.id, id))
+        .returning();
+      return rows[0] ?? null;
+    },
+    // Terminal-state guard: conditional UPDATE — exactly one archive transition.
+    async markArchived(
+      e: Db | DbTx,
+      id: string,
+    ): Promise<PatientMedicineRow | null> {
+      const rows = await exec(e)
+        .update(patientMedicines)
+        .set({ archivedAt: new Date(), updatedAt: new Date() })
+        .where(
+          and(eq(patientMedicines.id, id), isNull(patientMedicines.archivedAt)),
+        )
+        .returning();
+      return rows[0] ?? null;
+    },
+    async deleteById(e: Db | DbTx, id: string): Promise<void> {
+      await exec(e).delete(patientMedicines).where(eq(patientMedicines.id, id));
+    },
+  };
+}
+
+export type PatientMedicinesRepo = ReturnType<
+  typeof createPatientMedicinesRepo
 >;

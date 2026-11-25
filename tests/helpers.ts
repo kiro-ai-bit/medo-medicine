@@ -73,6 +73,9 @@ export function makeConfig(
     brokerDatabaseUrl: "pglite://",
     servicePublicKeys: keys.peerServicePublicJwkByIss,
     identityJwksUrl: "http://identity.test/.well-known/jwks.json",
+    servicePrivateKey: keys.medicineServicePrivateJwk,
+    careServiceUrl: "http://care.test",
+    scheduleDoseServiceUrl: "http://scheduledose.test",
     r2: {
       endpoint: "https://r2.test",
       accessKeyId: "test-key",
@@ -125,11 +128,28 @@ export interface TestApp extends BuiltApp {
   config: AppConfig;
   keys: TestKeys;
   r2Stub: R2Stub;
+  careStub: PeerStub;
+  scheduleDoseStub: PeerStub;
   closeAll: () => Promise<void>;
 }
 
-// Stub fetch: JWKS URL → identity public JWK.
-function makeFetchStub(keys: TestKeys): typeof fetch {
+// Peer-service stub handler — return {status, body} or throw for network failure.
+export type PeerHandler = (
+  url: string,
+) =>
+  | { status?: number; body?: unknown }
+  | Promise<{ status?: number; body?: unknown }>;
+
+export interface PeerStub {
+  calls: string[];
+  setHandler: (fn: PeerHandler) => void;
+}
+
+// Stub fetch: JWKS URL → identity public JWK; care/schedule-dose → peer stubs.
+function makeFetchStub(
+  keys: TestKeys,
+  peers: { care: PeerStubInternal; scheduleDose: PeerStubInternal },
+): typeof fetch {
   return (async (input: Parameters<typeof fetch>[0]) => {
     const url = String(input);
     if (url.endsWith("/.well-known/jwks.json")) {
@@ -138,8 +158,40 @@ function makeFetchStub(keys: TestKeys): typeof fetch {
         headers: { "content-type": "application/json" },
       });
     }
+    if (url.includes("/v1/care/check-link")) {
+      return peers.care.handle(url);
+    }
+    if (url.includes("has-dose-records")) {
+      return peers.scheduleDose.handle(url);
+    }
     return new Response("not found", { status: 404 });
   }) as typeof fetch;
+}
+
+type PeerStubInternal = PeerStub & {
+  handle: (url: string) => Promise<Response>;
+};
+
+function createPeerStub(defaultBody: unknown): PeerStubInternal {
+  const calls: string[] = [];
+  let handler: PeerHandler = async () => ({
+    status: 200,
+    body: defaultBody,
+  });
+  return {
+    calls,
+    setHandler(fn) {
+      handler = fn;
+    },
+    async handle(url: string) {
+      calls.push(url);
+      const out = await handler(url);
+      return new Response(JSON.stringify(out.body ?? {}), {
+        status: out.status ?? 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  };
 }
 
 export async function createTestApp(
@@ -150,7 +202,12 @@ export async function createTestApp(
 ): Promise<TestApp> {
   const keys = await makeKeys();
   const config = makeConfig(keys, opts.configOverrides);
-  const fetchImpl = makeFetchStub(keys);
+  const careStub = createPeerStub({ active: false });
+  const scheduleDoseStub = createPeerStub({ hasDoseRecords: false });
+  const fetchImpl = makeFetchStub(keys, {
+    care: careStub,
+    scheduleDose: scheduleDoseStub,
+  });
   const servicePg = new PGlite();
   const brokerPg = new PGlite();
   const serviceDb = drizzlePglite(servicePg, { schema });
@@ -176,6 +233,8 @@ export async function createTestApp(
     config,
     keys,
     r2Stub,
+    careStub,
+    scheduleDoseStub,
     closeAll: async () => {
       await built.close();
       await servicePg.close();
