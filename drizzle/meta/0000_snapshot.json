@@ -1,0 +1,590 @@
+{
+  "id": "70aa2fa6-3d99-4a70-966b-50e4e74a20a1",
+  "prevId": "00000000-0000-0000-0000-000000000000",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "public.medicine_catalog_entries": {
+      "name": "medicine_catalog_entries",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "brand_name": {
+          "name": "brand_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ingredient_names": {
+          "name": "ingredient_names",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "form": {
+          "name": "form",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "packaging_quantity": {
+          "name": "packaging_quantity",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "idx_catalog_brand_form": {
+          "name": "idx_catalog_brand_form",
+          "columns": [
+            {
+              "expression": "brand_name",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "form",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "idx_catalog_updated": {
+          "name": "idx_catalog_updated",
+          "columns": [
+            {
+              "expression": "\"updated_at\" DESC",
+              "asc": true,
+              "isExpression": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "uq_catalog_entries_identity": {
+          "name": "uq_catalog_entries_identity",
+          "columns": [
+            {
+              "expression": "brand_name",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "form",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "ingredient_names",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "catalog_brand_name_len": {
+          "name": "catalog_brand_name_len",
+          "value": "length(\"medicine_catalog_entries\".\"brand_name\") BETWEEN 1 AND 200"
+        },
+        "catalog_ingredients_min": {
+          "name": "catalog_ingredients_min",
+          "value": "cardinality(\"medicine_catalog_entries\".\"ingredient_names\") >= 1"
+        },
+        "catalog_form_enum": {
+          "name": "catalog_form_enum",
+          "value": "\"medicine_catalog_entries\".\"form\" IN ('tablet','capsule','syrup','injection','drops','other')"
+        },
+        "catalog_pack_qty": {
+          "name": "catalog_pack_qty",
+          "value": "\"medicine_catalog_entries\".\"packaging_quantity\" > 0"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.catalog_photo_keys": {
+      "name": "catalog_photo_keys",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "entry_id": {
+          "name": "entry_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "slot": {
+          "name": "slot",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "photo_key": {
+          "name": "photo_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "issued_at": {
+          "name": "issued_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "confirmed_at": {
+          "name": "confirmed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "catalog_photo_keys_photo_key_key": {
+          "name": "catalog_photo_keys_photo_key_key",
+          "columns": [
+            {
+              "expression": "photo_key",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "idx_photo_keys_entry_slot": {
+          "name": "idx_photo_keys_entry_slot",
+          "columns": [
+            {
+              "expression": "entry_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "slot",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "idx_photo_keys_unconfirmed": {
+          "name": "idx_photo_keys_unconfirmed",
+          "columns": [
+            {
+              "expression": "confirmed_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"catalog_photo_keys\".\"confirmed_at\" IS NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "catalog_photo_keys_entry_fk": {
+          "name": "catalog_photo_keys_entry_fk",
+          "tableFrom": "catalog_photo_keys",
+          "tableTo": "medicine_catalog_entries",
+          "columnsFrom": ["entry_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "catalog_photo_keys_slot_enum": {
+          "name": "catalog_photo_keys_slot_enum",
+          "value": "\"catalog_photo_keys\".\"slot\" IN ('A','B','C')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.catalog_photos": {
+      "name": "catalog_photos",
+      "schema": "",
+      "columns": {
+        "entry_id": {
+          "name": "entry_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "slot": {
+          "name": "slot",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "photo_key": {
+          "name": "photo_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "catalog_photos_entry_fk": {
+          "name": "catalog_photos_entry_fk",
+          "tableFrom": "catalog_photos",
+          "tableTo": "medicine_catalog_entries",
+          "columnsFrom": ["entry_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "catalog_photos_entry_id_slot_pk": {
+          "name": "catalog_photos_entry_id_slot_pk",
+          "columns": ["entry_id", "slot"]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "catalog_photos_slot_enum": {
+          "name": "catalog_photos_slot_enum",
+          "value": "\"catalog_photos\".\"slot\" IN ('A','B','C')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.consumer_offsets": {
+      "name": "consumer_offsets",
+      "schema": "",
+      "columns": {
+        "consumer_name": {
+          "name": "consumer_name",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "last_event_id": {
+          "name": "last_event_id",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.dose_outcome_states": {
+      "name": "dose_outcome_states",
+      "schema": "",
+      "columns": {
+        "medicine_id": {
+          "name": "medicine_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "dose_id": {
+          "name": "dose_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "last_outcome": {
+          "name": "last_outcome",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "occurred_at": {
+          "name": "occurred_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "dose_outcome_states_medicine_fk": {
+          "name": "dose_outcome_states_medicine_fk",
+          "tableFrom": "dose_outcome_states",
+          "tableTo": "patient_medicines",
+          "columnsFrom": ["medicine_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "dose_outcome_states_medicine_id_dose_id_pk": {
+          "name": "dose_outcome_states_medicine_id_dose_id_pk",
+          "columns": ["medicine_id", "dose_id"]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "dose_outcome_states_outcome_enum": {
+          "name": "dose_outcome_states_outcome_enum",
+          "value": "\"dose_outcome_states\".\"last_outcome\" IN ('taken-on-time','taken-late','skipped','missed')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.patient_medicines": {
+      "name": "patient_medicines",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "patient_id": {
+          "name": "patient_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "catalog_entry_id": {
+          "name": "catalog_entry_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "prescribing_doctor": {
+          "name": "prescribing_doctor",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "dosage": {
+          "name": "dosage",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "doses_remaining": {
+          "name": "doses_remaining",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "price": {
+          "name": "price",
+          "type": "numeric(12, 2)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "pharmacy_name": {
+          "name": "pharmacy_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "archived_at": {
+          "name": "archived_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "refill_low_armed": {
+          "name": "refill_low_armed",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "refill_out_armed": {
+          "name": "refill_out_armed",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "idx_patient_medicines_patient": {
+          "name": "idx_patient_medicines_patient",
+          "columns": [
+            {
+              "expression": "patient_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "idx_patient_medicines_catalog": {
+          "name": "idx_patient_medicines_catalog",
+          "columns": [
+            {
+              "expression": "catalog_entry_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "patient_medicines_catalog_entry_fk": {
+          "name": "patient_medicines_catalog_entry_fk",
+          "tableFrom": "patient_medicines",
+          "tableTo": "medicine_catalog_entries",
+          "columnsFrom": ["catalog_entry_id"],
+          "columnsTo": ["id"],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "patient_medicines_doctor_len": {
+          "name": "patient_medicines_doctor_len",
+          "value": "length(\"patient_medicines\".\"prescribing_doctor\") BETWEEN 1 AND 200"
+        },
+        "patient_medicines_dosage_len": {
+          "name": "patient_medicines_dosage_len",
+          "value": "length(\"patient_medicines\".\"dosage\") BETWEEN 1 AND 200"
+        },
+        "patient_medicines_doses_remaining": {
+          "name": "patient_medicines_doses_remaining",
+          "value": "\"patient_medicines\".\"doses_remaining\" >= 0"
+        },
+        "patient_medicines_price": {
+          "name": "patient_medicines_price",
+          "value": "\"patient_medicines\".\"price\" >= 0"
+        },
+        "patient_medicines_pharmacy_len": {
+          "name": "patient_medicines_pharmacy_len",
+          "value": "length(\"patient_medicines\".\"pharmacy_name\") BETWEEN 1 AND 200"
+        }
+      },
+      "isRLSEnabled": false
+    }
+  },
+  "enums": {},
+  "schemas": {},
+  "sequences": {},
+  "roles": {},
+  "policies": {},
+  "views": {},
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  }
+}
