@@ -102,7 +102,7 @@ export function buildCatalogWhere(q: string | undefined) {
   const pattern = `%${q}%`;
   return or(
     ilike(medicineCatalogEntries.brandName, pattern),
-    sql`${medicineCatalogEntries.ingredientNames}::text ILIKE ${pattern}`,
+    sql`array_to_string(${medicineCatalogEntries.ingredientNames}, ' ') ILIKE ${pattern}`,
   );
 }
 

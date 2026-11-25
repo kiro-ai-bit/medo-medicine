@@ -66,6 +66,15 @@ describe("catalog CRUD", () => {
     expect(body.error.details.existingEntryId).toBe(first.id);
   });
 
+  it("unique index rejects raw duplicate insert (race guard, LD-MED-06)", async () => {
+    const brand = `IdxMed-${Math.random().toString(36).slice(2, 8)}`;
+    const ins = `INSERT INTO medicine_catalog_entries (brand_name, ingredient_names, form, packaging_quantity) VALUES ($1, $2::text[], 'tablet', 10)`;
+    await t.servicePg.query(ins, [brand, ["ing-a", "ing-b"]]);
+    await expect(
+      t.servicePg.query(ins, [brand, ["ing-a", "ing-b"]]),
+    ).rejects.toThrow();
+  });
+
   it("different ingredients → not a duplicate", async () => {
     const res = await createEntry({
       brandName: "DupMed",
