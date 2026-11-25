@@ -14,11 +14,16 @@ import {
 import type { JWK } from "jose";
 import type { Db } from "@infrastructure/Persistence/db.js";
 import type { Queryable } from "@kiro-ai-bit/eventing";
-import type { PublisherHandle } from "@kiro-ai-bit/eventing";
+import type { ConsumerHandle, PublisherHandle } from "@kiro-ai-bit/eventing";
 import {
   ensureMedicineEventing,
+  startAccountDeletedConsumer,
+  startDoseOutcomeConsumer,
   startMedicinePublisher,
 } from "@infrastructure/Eventing/index.js";
+import { handleAccountDeleted } from "@application/AccountDeletion/handleAccountDeleted.js";
+import { handleDoseOutcomeChanged } from "@application/DoseOutcome/handleDoseOutcomeChanged.js";
+import type { DoseOutcome } from "@infrastructure/Persistence/schema/index.js";
 import { createJwksCache } from "@infrastructure/AuthzClient/jwks.js";
 import {
   createR2Client,
@@ -125,6 +130,8 @@ export interface BuiltApp {
   r2: R2Client;
   checkLinkCache: CheckLinkCache;
   publisher?: PublisherHandle;
+  doseOutcomeConsumer?: ConsumerHandle;
+  accountDeletedConsumer?: ConsumerHandle;
   close: () => Promise<void>;
 }
 
@@ -212,6 +219,48 @@ export async function buildApp(deps: AppDeps): Promise<BuiltApp> {
       })
     : undefined;
 
+  const workerLogger = {
+    error: (m: string, meta?: Record<string, unknown>) =>
+      app.log.error({ meta }, m),
+  };
+  const doseOutcomeConsumer = deps.startWorkers
+    ? await startDoseOutcomeConsumer({
+        service: deps.medicineQueryable,
+        broker: deps.brokerQueryable,
+        brokerDsn: deps.brokerDsn,
+        dispatch: (event) =>
+          handleDoseOutcomeChanged(
+            { db: deps.db, metrics },
+            {
+              doseId: event.doseId as string,
+              medicineId: event.medicineId as string,
+              patientId: event.patientId as string,
+              outcome: event.outcome as DoseOutcome,
+              occurredAt: event.occurredAt as string,
+              actorId: event.actorId as string | undefined,
+            },
+          ),
+        logger: workerLogger,
+      })
+    : undefined;
+  const accountDeletedConsumer = deps.startWorkers
+    ? await startAccountDeletedConsumer({
+        service: deps.medicineQueryable,
+        broker: deps.brokerQueryable,
+        brokerDsn: deps.brokerDsn,
+        dispatch: (event) =>
+          handleAccountDeleted(
+            {
+              db: deps.db,
+              checkLinkCache: checkLinkClient.cache,
+              metrics,
+            },
+            { userId: event.userId as string },
+          ),
+        logger: workerLogger,
+      })
+    : undefined;
+
   return {
     app,
     db: deps.db,
@@ -219,7 +268,11 @@ export async function buildApp(deps: AppDeps): Promise<BuiltApp> {
     r2,
     checkLinkCache: checkLinkClient.cache,
     publisher,
+    doseOutcomeConsumer,
+    accountDeletedConsumer,
     close: async () => {
+      if (accountDeletedConsumer) await accountDeletedConsumer.stop();
+      if (doseOutcomeConsumer) await doseOutcomeConsumer.stop();
       if (publisher) await publisher.stop();
       await app.close();
     },

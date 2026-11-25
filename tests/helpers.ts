@@ -277,3 +277,81 @@ export async function mintPeerServiceToken(
 
 export const PATIENT_ID = "11111111-1111-4111-8111-111111111111";
 export const CAREGIVER_ID = "22222222-2222-4222-8222-222222222222";
+
+// ---- shared fixtures -----------------------------------------------------
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const j = (r: { json(): unknown }) => r.json() as Record<string, any>;
+export const auth = (tok: string) => ({ authorization: `Bearer ${tok}` });
+
+export function uniqueBrand(prefix: string) {
+  return `${prefix}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+const CATALOG_ENTRY = {
+  ingredientNames: ["TestIngredient"],
+  form: "tablet",
+  packagingQuantity: 10,
+};
+
+// Catalog entry + confirmed slot-A photo via the public API.
+export async function catalogEntryWithPhoto(t: TestApp, tok: string) {
+  const created = j(
+    await t.app.inject({
+      method: "POST",
+      url: "/v1/medicine-catalog",
+      headers: auth(tok),
+      payload: { ...CATALOG_ENTRY, brandName: uniqueBrand("Med") },
+    }),
+  );
+  const issue = j(
+    await t.app.inject({
+      method: "POST",
+      url: `/v1/medicine-catalog/${created.id}/photos`,
+      headers: auth(tok),
+      payload: { slot: "A" },
+    }),
+  );
+  await t.app.inject({
+    method: "PUT",
+    url: `/v1/medicine-catalog/${created.id}/photos/A`,
+    headers: auth(tok),
+    payload: { photoKey: issue.photoKey },
+  });
+  return created as { id: string; brandName: string };
+}
+
+// Adopt a catalog entry into a patient medicine record via the public API.
+export async function adoptMedicine(
+  t: TestApp,
+  opts: {
+    patientId?: string;
+    dosesRemaining?: number;
+    tok?: string;
+    entryId?: string;
+  } = {},
+) {
+  const tok =
+    opts.tok ??
+    (await mintUserToken(t.keys, {
+      sub: opts.patientId ?? PATIENT_ID,
+      role: "Patient",
+    }));
+  const entryId = opts.entryId ?? (await catalogEntryWithPhoto(t, tok)).id;
+  return j(
+    await t.app.inject({
+      method: "POST",
+      url: "/v1/medicines",
+      headers: auth(tok),
+      payload: {
+        patientId: opts.patientId ?? PATIENT_ID,
+        catalogEntryId: entryId,
+        prescribingDoctor: "Dr. Test",
+        dosage: "1 tab",
+        dosesRemaining: opts.dosesRemaining ?? 10,
+        price: 10,
+        pharmacyName: "Pharm",
+      },
+    }),
+  ) as { id: string; catalogEntryId: string; dosesRemaining: number };
+}

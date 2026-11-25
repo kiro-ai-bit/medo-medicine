@@ -7,7 +7,7 @@ import { AuthError, DependencyError, ForbiddenError } from "./errors.js";
 
 declare module "fastify" {
   interface FastifyContextConfig {
-    auth?: "user" | "service";
+    auth?: "user" | "service" | "either";
   }
   interface FastifyRequest {
     user?: UserClaims;
@@ -88,12 +88,50 @@ export function registerAuthn(app: FastifyInstance, deps: AuthnDeps): void {
     throw new Error("unreachable");
   }
 
+  // Returns {iss} on valid service JWT, "wrongAud" on known-iss/wrong-aud,
+  // null when no peer key verifies.
+  async function verifyService(
+    token: string,
+  ): Promise<{ iss: string } | "wrongAud" | null> {
+    let sawWrongAud = false;
+    for (const [iss, jwks] of serviceKeySets) {
+      try {
+        const { payload } = await jwtVerify(token, jwks, { issuer: iss });
+        const aud = payload.aud;
+        const auds = Array.isArray(aud) ? aud : aud ? [aud] : [];
+        if (auds.includes(deps.serviceAudience)) return { iss };
+        sawWrongAud = true;
+      } catch {
+        // try next peer key
+      }
+    }
+    return sawWrongAud ? "wrongAud" : null;
+  }
+
   app.addHook("preValidation", async (request) => {
     const mode = request.routeOptions.config.auth;
     if (!mode) return;
     const token = bearerToken(request);
     if (!token)
       throw new AuthError(401, "UNAUTHORIZED", "missing bearer token");
+
+    if (mode === "either") {
+      // Dual surface (LLD §6 internal row): service JWT → serviceCaller pass;
+      // user JWT → full check-link authz. Token class decides authz chain.
+      const svc = await verifyService(token);
+      if (svc && svc !== "wrongAud") {
+        request.serviceCaller = svc.iss;
+        return;
+      }
+      if (svc === "wrongAud") throw new ForbiddenError("wrong audience");
+      try {
+        request.user = await verifyUser(token);
+      } catch (err) {
+        if (err instanceof DependencyError) throw err;
+        throw new AuthError(401, "UNAUTHORIZED", "invalid token");
+      }
+      return;
+    }
 
     if (mode === "user") {
       try {
@@ -107,27 +145,12 @@ export function registerAuthn(app: FastifyInstance, deps: AuthnDeps): void {
     }
 
     // service
-    let authed: { iss: string } | null = null;
-    let sawWrongAud = false;
-    for (const [iss, jwks] of serviceKeySets) {
-      try {
-        const { payload } = await jwtVerify(token, jwks, { issuer: iss });
-        const aud = payload.aud;
-        const auds = Array.isArray(aud) ? aud : aud ? [aud] : [];
-        if (auds.includes(deps.serviceAudience)) {
-          authed = { iss };
-          break;
-        }
-        sawWrongAud = true;
-      } catch {
-        // try next peer key
-      }
-    }
-    if (authed) {
-      request.serviceCaller = authed.iss;
+    const svc = await verifyService(token);
+    if (svc && svc !== "wrongAud") {
+      request.serviceCaller = svc.iss;
       return;
     }
-    if (sawWrongAud) throw new ForbiddenError("wrong audience");
+    if (svc === "wrongAud") throw new ForbiddenError("wrong audience");
     throw new AuthError(401, "UNAUTHORIZED", "invalid service token");
   });
 }

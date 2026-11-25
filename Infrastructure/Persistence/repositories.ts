@@ -2,6 +2,7 @@ import { and, desc, eq, ilike, inArray, isNull, or, sql } from "drizzle-orm";
 import {
   catalogPhotoKeys,
   catalogPhotos,
+  doseOutcomeStates,
   medicineCatalogEntries,
   patientMedicines,
 } from "./schema/index.js";
@@ -9,6 +10,8 @@ import type {
   CatalogEntryRow,
   CatalogPhotoKeyRow,
   CatalogPhotoRow,
+  DoseOutcome,
+  DoseOutcomeStateRow,
   NewCatalogEntryRow,
   NewCatalogPhotoKeyRow,
   NewPatientMedicineRow,
@@ -292,9 +295,58 @@ export function createPatientMedicinesRepo() {
     async deleteById(e: Db | DbTx, id: string): Promise<void> {
       await exec(e).delete(patientMedicines).where(eq(patientMedicines.id, id));
     },
+    // AccountDeleted purge — dose_outcome_states cascade via FK (LLD §8.11).
+    async deleteByPatientId(e: Db | DbTx, patientId: string): Promise<void> {
+      await exec(e)
+        .delete(patientMedicines)
+        .where(eq(patientMedicines.patientId, patientId));
+    },
   };
 }
 
 export type PatientMedicinesRepo = ReturnType<
   typeof createPatientMedicinesRepo
+>;
+
+// Per-(medicine,dose) last-applied outcome — idempotency substrate (LLD §5.5).
+export function createDoseOutcomeStatesRepo() {
+  const exec = (e: Db | DbTx) => e as unknown as Db;
+  return {
+    async findByDose(
+      e: Db | DbTx,
+      medicineId: string,
+      doseId: string,
+    ): Promise<DoseOutcomeStateRow | null> {
+      const rows = await exec(e)
+        .select()
+        .from(doseOutcomeStates)
+        .where(
+          and(
+            eq(doseOutcomeStates.medicineId, medicineId),
+            eq(doseOutcomeStates.doseId, doseId),
+          ),
+        )
+        .limit(1);
+      return rows[0] ?? null;
+    },
+    async upsert(
+      e: Db | DbTx,
+      medicineId: string,
+      doseId: string,
+      outcome: DoseOutcome,
+      occurredAt: Date,
+    ): Promise<void> {
+      await exec(e)
+        .insert(doseOutcomeStates)
+        .values({ medicineId, doseId, lastOutcome: outcome, occurredAt })
+        .onConflictDoUpdate({
+          target: [doseOutcomeStates.medicineId, doseOutcomeStates.doseId],
+          set: { lastOutcome: outcome, occurredAt, updatedAt: new Date() },
+        });
+    },
+  };
+}
+
+export type DoseOutcomeStatesRepo = ReturnType<
+  typeof createDoseOutcomeStatesRepo
 >;

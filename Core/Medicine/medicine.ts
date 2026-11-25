@@ -8,10 +8,12 @@ import type { Db, DbTx } from "@infrastructure/Persistence/db.js";
 import {
   createCatalogEntriesRepo,
   createCatalogPhotosRepo,
+  createDoseOutcomeStatesRepo,
   createPatientMedicinesRepo,
   type PatientMedicinePatch,
 } from "@infrastructure/Persistence/repositories.js";
 import type {
+  DoseOutcome,
   PatientMedicineRow,
   PhotoSlot,
 } from "@infrastructure/Persistence/schema/index.js";
@@ -25,7 +27,7 @@ import {
   NotFoundError,
 } from "@core/errors.js";
 import type { Metrics } from "@core/metrics.js";
-import type { UserClaims } from "@core/types.js";
+import type { ServiceClaims, UserClaims } from "@core/types.js";
 
 export interface MedicineDeps {
   db: Db;
@@ -87,6 +89,35 @@ async function appendRefillEvent(
     type: "RefillThresholdCrossed",
     payload: { medicineId, patientId, dosesRemaining, threshold },
   });
+}
+
+// §8.7 — shared arm-state evaluation inside every count-mutation tx.
+// Pass the PRE-mutation arm flags; returns the transition for flag persistence.
+async function evaluateRefillThresholds(
+  tx: DbTx,
+  medicine: {
+    id: string;
+    patientId: string;
+    refillLowArmed: boolean;
+    refillOutArmed: boolean;
+  },
+  dosesRemaining: number,
+): Promise<RefillTransition> {
+  const transition = computeRefillTransition(
+    medicine.refillLowArmed,
+    medicine.refillOutArmed,
+    dosesRemaining,
+  );
+  if (transition.threshold !== null) {
+    await appendRefillEvent(
+      tx,
+      medicine.id,
+      medicine.patientId,
+      dosesRemaining,
+      transition.threshold,
+    );
+  }
+  return transition;
 }
 
 type CatalogView = {
@@ -222,15 +253,18 @@ export async function createMedicine(
       refillLowArmed: transition.refillLowArmed,
       refillOutArmed: transition.refillOutArmed,
     });
-    if (transition.threshold !== null) {
-      await appendRefillEvent(
-        tx,
-        inserted.id,
-        inserted.patientId,
-        cmd.dosesRemaining,
-        transition.threshold,
-      );
-    }
+    // adopt-time initial eval counts as first transition (LD-MED-08) —
+    // pre-mutation flags are the column defaults (true, true)
+    await evaluateRefillThresholds(
+      tx,
+      {
+        id: inserted.id,
+        patientId: inserted.patientId,
+        refillLowArmed: true,
+        refillOutArmed: true,
+      },
+      cmd.dosesRemaining,
+    );
     return inserted;
   });
   deps.metrics?.incr("medo_medicine_medicines_total", { action: "created" });
@@ -243,15 +277,18 @@ export async function createMedicine(
 }
 
 // GET /v1/medicines/{id} — archived records resolve (FR-MED-014).
+// Service-JWT callers (internal surface, §6 internal row) skip check-link authz.
 export async function getMedicine(
   deps: MedicineDeps,
   medicineId: string,
-  actor: UserClaims,
+  actor: UserClaims | ServiceClaims,
 ): Promise<PatientMedicineDetailDto> {
   const repo = createPatientMedicinesRepo();
   const row = await repo.findById(deps.db, medicineId);
   if (!row) throw new NotFoundError("medicine not found");
-  await authorizePatientAccess(deps, row.patientId, actor);
+  if ("sub" in actor) {
+    await authorizePatientAccess(deps, row.patientId, actor);
+  }
   return detailDto(deps, row);
 }
 
@@ -299,13 +336,16 @@ export async function editMedicine(
   const updated = await deps.db.transaction(async (tx) => {
     const u = await repo.updateFields(tx, medicineId, fields);
     if (!u) throw new NotFoundError("medicine not found");
-    if (transition?.threshold != null) {
-      await appendRefillEvent(
+    if (countChanged) {
+      await evaluateRefillThresholds(
         tx,
-        u.id,
-        u.patientId,
+        {
+          id: u.id,
+          patientId: u.patientId,
+          refillLowArmed: row.refillLowArmed,
+          refillOutArmed: row.refillOutArmed,
+        },
         u.dosesRemaining,
-        transition.threshold,
       );
     }
     return u;
@@ -350,6 +390,83 @@ export async function archiveMedicine(
     id: result.id,
     archivedAt: result.archivedAt.toISOString(),
   };
+}
+
+// ---- DoseOutcomeChanged delta (LLD §8.6, LD-MED-07) -----------------------
+
+export interface DoseOutcomeChangedPayload {
+  doseId: string;
+  medicineId: string;
+  patientId: string;
+  outcome: DoseOutcome;
+  occurredAt: string;
+  actorId?: string;
+}
+
+const TAKEN_CLASS: ReadonlySet<string> = new Set([
+  "taken-on-time",
+  "taken-late",
+]);
+function isTakenClass(o: string): boolean {
+  return TAKEN_CLASS.has(o);
+}
+
+// One tx: outcome-state guard → count delta (floor 0) → arm eval → outbox.
+// Returns "applied" | "noop" for the consumed metric.
+export async function applyDoseOutcomeDelta(
+  deps: { db: Db; metrics?: Metrics },
+  event: DoseOutcomeChangedPayload,
+): Promise<"applied" | "noop"> {
+  const repo = createPatientMedicinesRepo();
+  const states = createDoseOutcomeStatesRepo();
+  let countDelta = 0;
+  const result = await deps.db.transaction(async (tx) => {
+    const med = await repo.findById(tx, event.medicineId);
+    if (!med || med.patientId !== event.patientId) return "noop" as const;
+    const state = await states.findByDose(tx, med.id, event.doseId);
+    const eventAt = new Date(event.occurredAt);
+    if (state) {
+      const stateAt = new Date(state.occurredAt);
+      const cmp = eventAt.getTime() - stateAt.getTime();
+      if (cmp < 0) return "noop" as const; // stale out-of-order
+      if (cmp === 0 && event.outcome === state.lastOutcome)
+        return "noop" as const; // identical redelivery
+    }
+    const oldTaken = state ? isTakenClass(state.lastOutcome) : false;
+    const newTaken = isTakenClass(event.outcome);
+    const delta = (oldTaken ? 1 : 0) - (newTaken ? 1 : 0);
+    countDelta = delta;
+    const newCount = Math.max(0, med.dosesRemaining + delta);
+    const transition = computeRefillTransition(
+      med.refillLowArmed,
+      med.refillOutArmed,
+      newCount,
+    );
+    await repo.updateFields(tx, med.id, {
+      dosesRemaining: newCount,
+      refillLowArmed: transition.refillLowArmed,
+      refillOutArmed: transition.refillOutArmed,
+    });
+    await states.upsert(tx, med.id, event.doseId, event.outcome, eventAt);
+    await evaluateRefillThresholds(
+      tx,
+      {
+        id: med.id,
+        patientId: med.patientId,
+        refillLowArmed: med.refillLowArmed,
+        refillOutArmed: med.refillOutArmed,
+      },
+      newCount,
+    );
+    return "applied" as const;
+  });
+  deps.metrics?.incr("medo_medicine_doseoutcome_consumed_total", {
+    result,
+  });
+  if (result === "applied" && countDelta !== 0) {
+    deps.metrics?.incr("medo_medicine_doses_remaining_deltas_total");
+  }
+  return result;
 }
 
 // DELETE /v1/medicines/{id} — pre-tx fail-closed has-dose-records guard (§8.10).

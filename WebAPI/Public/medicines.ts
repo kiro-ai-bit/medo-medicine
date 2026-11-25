@@ -63,19 +63,23 @@ export function registerMedicineRoutes(
     },
   );
 
+  // Dual surface: user JWT → check-link authz; service JWT → internal read
+  // pass (LLD §6 internal row — same path, token class decides authz chain).
   app.get(
     "/v1/medicines/:id",
     {
-      config: { auth: "user", rateLimit: "read" },
+      config: { auth: "either", rateLimit: "read" },
       schema: {
         params: MedicineIdParamsSchema,
         response: { 200: PatientMedicineDetailDtoSchema },
       },
     },
     async (request) => {
-      const user = requireUser(request);
       const { id } = request.params as { id: string };
-      return getMedicine(deps, id, user);
+      const actor = request.serviceCaller
+        ? { iss: request.serviceCaller }
+        : requireUser(request);
+      return getMedicine(deps, id, actor);
     },
   );
 

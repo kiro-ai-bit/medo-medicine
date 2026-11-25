@@ -9,3 +9,8 @@ export interface UserClaims {
   iss: string;
   aud: string | string[];
 }
+
+// Inbound service-JWT caller (iss = peer service name) — internal surface only.
+export interface ServiceClaims {
+  iss: string;
+}
