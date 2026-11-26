@@ -1,0 +1,2 @@
+ALTER TABLE "patient_medicines" ADD COLUMN "refill_threshold" integer DEFAULT 6 NOT NULL;--> statement-breakpoint
+ALTER TABLE "patient_medicines" ADD CONSTRAINT "patient_medicines_refill_threshold" CHECK ("patient_medicines"."refill_threshold" >= 0);

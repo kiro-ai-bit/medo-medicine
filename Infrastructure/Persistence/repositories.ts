@@ -223,6 +223,7 @@ export type PatientMedicinePatch = Partial<{
   prescribingDoctor: string;
   dosage: string;
   dosesRemaining: number;
+  refillThreshold: number;
   price: number;
   pharmacyName: string;
   refillLowArmed: boolean;

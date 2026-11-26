@@ -22,6 +22,7 @@ export const patientMedicines = pgTable(
     prescribingDoctor: text("prescribing_doctor").notNull(),
     dosage: text("dosage").notNull(),
     dosesRemaining: integer("doses_remaining").notNull(),
+    refillThreshold: integer("refill_threshold").notNull().default(6),
     price: numeric("price", {
       precision: 12,
       scale: 2,
@@ -55,6 +56,7 @@ export const patientMedicines = pgTable(
       sql`length(${t.dosage}) BETWEEN 1 AND 200`,
     ),
     check("patient_medicines_doses_remaining", sql`${t.dosesRemaining} >= 0`),
+    check("patient_medicines_refill_threshold", sql`${t.refillThreshold} >= 0`),
     check("patient_medicines_price", sql`${t.price} >= 0`),
     check(
       "patient_medicines_pharmacy_len",

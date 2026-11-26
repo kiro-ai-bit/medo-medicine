@@ -57,9 +57,10 @@ async function authorizePatientAccess(
 }
 
 // §8.7 arm-state machine — pure transition; flags persisted + outbox in same tx.
+// lowThreshold = per-medicine refillThreshold (default 6); 0 alert always applies.
 export interface RefillTransition {
   // deepest qualifying threshold to emit, or null
-  threshold: 6 | 0 | null;
+  threshold: number | null;
   refillLowArmed: boolean;
   refillOutArmed: boolean;
 }
@@ -68,12 +69,13 @@ export function computeRefillTransition(
   lowArmed: boolean,
   outArmed: boolean,
   v: number,
+  lowThreshold = 6,
 ): RefillTransition {
-  const lowFire = v <= 6 && lowArmed;
+  const lowFire = v <= lowThreshold && lowArmed;
   const outFire = v === 0 && outArmed;
   return {
-    threshold: outFire ? 0 : lowFire ? 6 : null,
-    refillLowArmed: v > 6 ? true : lowFire ? false : lowArmed,
+    threshold: outFire ? 0 : lowFire ? lowThreshold : null,
+    refillLowArmed: v > lowThreshold ? true : lowFire ? false : lowArmed,
     refillOutArmed: v > 0 ? true : outFire ? false : outArmed,
   };
 }
@@ -83,7 +85,7 @@ async function appendRefillEvent(
   medicineId: string,
   patientId: string,
   dosesRemaining: number,
-  threshold: 6 | 0,
+  threshold: number,
 ): Promise<void> {
   await appendOutbox(tx, {
     type: "RefillThresholdCrossed",
@@ -100,6 +102,7 @@ async function evaluateRefillThresholds(
     patientId: string;
     refillLowArmed: boolean;
     refillOutArmed: boolean;
+    refillThreshold: number;
   },
   dosesRemaining: number,
 ): Promise<RefillTransition> {
@@ -107,6 +110,7 @@ async function evaluateRefillThresholds(
     medicine.refillLowArmed,
     medicine.refillOutArmed,
     dosesRemaining,
+    medicine.refillThreshold,
   );
   if (transition.threshold !== null) {
     await appendRefillEvent(
@@ -172,6 +176,7 @@ function toSummaryDto(
     prescribingDoctor: row.prescribingDoctor,
     dosage: row.dosage,
     dosesRemaining: row.dosesRemaining,
+    refillThreshold: row.refillThreshold,
     price: row.price,
     pharmacyName: row.pharmacyName,
     createdAt: row.createdAt.toISOString(),
@@ -240,7 +245,13 @@ export async function createMedicine(
   }
 
   const repo = createPatientMedicinesRepo();
-  const transition = computeRefillTransition(true, true, cmd.dosesRemaining);
+  const lowThreshold = cmd.refillThreshold ?? 6;
+  const transition = computeRefillTransition(
+    true,
+    true,
+    cmd.dosesRemaining,
+    lowThreshold,
+  );
   const row = await deps.db.transaction(async (tx) => {
     const inserted = await repo.insert(tx, {
       patientId: cmd.patientId,
@@ -248,6 +259,7 @@ export async function createMedicine(
       prescribingDoctor: cmd.prescribingDoctor,
       dosage: cmd.dosage,
       dosesRemaining: cmd.dosesRemaining,
+      refillThreshold: lowThreshold,
       price: cmd.price,
       pharmacyName: cmd.pharmacyName,
       refillLowArmed: transition.refillLowArmed,
@@ -262,6 +274,7 @@ export async function createMedicine(
         patientId: inserted.patientId,
         refillLowArmed: true,
         refillOutArmed: true,
+        refillThreshold: lowThreshold,
       },
       cmd.dosesRemaining,
     );
@@ -311,11 +324,17 @@ export async function editMedicine(
   const countChanged =
     patch.dosesRemaining !== undefined &&
     patch.dosesRemaining !== row.dosesRemaining;
-  const transition = countChanged
+  const thresholdChanged =
+    patch.refillThreshold !== undefined &&
+    patch.refillThreshold !== row.refillThreshold;
+  const evalNeeded = countChanged || thresholdChanged;
+  const effectiveThreshold = patch.refillThreshold ?? row.refillThreshold;
+  const transition = evalNeeded
     ? computeRefillTransition(
         row.refillLowArmed,
         row.refillOutArmed,
-        patch.dosesRemaining as number,
+        patch.dosesRemaining ?? row.dosesRemaining,
+        effectiveThreshold,
       )
     : null;
 
@@ -325,6 +344,8 @@ export async function editMedicine(
   if (patch.dosage !== undefined) fields.dosage = patch.dosage;
   if (patch.dosesRemaining !== undefined)
     fields.dosesRemaining = patch.dosesRemaining;
+  if (patch.refillThreshold !== undefined)
+    fields.refillThreshold = patch.refillThreshold;
   if (patch.price !== undefined) fields.price = patch.price;
   if (patch.pharmacyName !== undefined)
     fields.pharmacyName = patch.pharmacyName;
@@ -336,7 +357,7 @@ export async function editMedicine(
   const updated = await deps.db.transaction(async (tx) => {
     const u = await repo.updateFields(tx, medicineId, fields);
     if (!u) throw new NotFoundError("medicine not found");
-    if (countChanged) {
+    if (evalNeeded) {
       await evaluateRefillThresholds(
         tx,
         {
@@ -344,6 +365,7 @@ export async function editMedicine(
           patientId: u.patientId,
           refillLowArmed: row.refillLowArmed,
           refillOutArmed: row.refillOutArmed,
+          refillThreshold: effectiveThreshold,
         },
         u.dosesRemaining,
       );
@@ -441,6 +463,7 @@ export async function applyDoseOutcomeDelta(
       med.refillLowArmed,
       med.refillOutArmed,
       newCount,
+      med.refillThreshold,
     );
     await repo.updateFields(tx, med.id, {
       dosesRemaining: newCount,
@@ -455,6 +478,7 @@ export async function applyDoseOutcomeDelta(
         patientId: med.patientId,
         refillLowArmed: med.refillLowArmed,
         refillOutArmed: med.refillOutArmed,
+        refillThreshold: med.refillThreshold,
       },
       newCount,
     );
